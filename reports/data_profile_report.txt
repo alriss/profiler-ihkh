@@ -1,0 +1,127 @@
+Data Profiling Report
+
+File: Torino_Lingotto_PM10_2024.csv
+Number of rows and columns: (732, 12)
+
+Columns:
+- Data rilevamento
+- Ora
+- Id Rete Monitoraggio
+- Codice Istat Comune
+- Progr. Punto Comune
+- Denominazione Stazione
+- Id Parametro
+- Descr. Parametro
+- Id Un. misura
+- Descr. Un. misura
+- Valore
+- Stato
+
+Column:		Data rilevamento
+Type:		String
+Unique values:	366
+Max:		31/12/2024
+Min:		01/01/2024
+Mean:		None
+Median:		None
+St deviation:	None
+---
+Column:		Ora
+Type:		String
+Unique values:	1
+Max:		23:59
+Min:		23:59
+Mean:		None
+Median:		None
+St deviation:	None
+---
+Column:		Id Rete Monitoraggio
+Type:		Int64
+Unique values:	1
+Max:		13
+Min:		13
+Mean:		13.0
+Median:		13.0
+St deviation:	0.0
+---
+Column:		Codice Istat Comune
+Type:		Int64
+Unique values:	1
+Max:		1272
+Min:		1272
+Mean:		1272.0
+Median:		1272.0
+St deviation:	0.0
+---
+Column:		Progr. Punto Comune
+Type:		Int64
+Unique values:	1
+Max:		806
+Min:		806
+Mean:		806.0
+Median:		806.0
+St deviation:	0.0
+---
+Column:		Denominazione Stazione
+Type:		String
+Unique values:	1
+Max:		Torino - Lingotto
+Min:		Torino - Lingotto
+Mean:		None
+Median:		None
+St deviation:	None
+---
+Column:		Id Parametro
+Type:		String
+Unique values:	2
+Max:		PM10_GBV
+Min:		PM10_B
+Mean:		None
+Median:		None
+St deviation:	None
+---
+Column:		Descr. Parametro
+Type:		String
+Unique values:	2
+Max:		PM10 - Beta
+Min:		PM10 - Basso Volume
+Mean:		None
+Median:		None
+St deviation:	None
+---
+Column:		Id Un. misura
+Type:		Int64
+Unique values:	1
+Max:		23
+Min:		23
+Mean:		23.0
+Median:		23.0
+St deviation:	0.0
+---
+Column:		Descr. Un. misura
+Type:		String
+Unique values:	1
+Max:		microgrammi / metro cubo
+Min:		microgrammi / metro cubo
+Mean:		None
+Median:		None
+St deviation:	None
+---
+Column:		Valore
+Type:		Float64
+Unique values:	79
+Max:		86.0
+Min:		4.0
+Mean:		24.6395173453997
+Median:		18.0
+St deviation:	19.379843012123388
+---
+Column:		Stato
+Type:		String
+Unique values:	2
+Max:		V
+Min:		E
+Mean:		None
+Median:		None
+St deviation:	None
+---
