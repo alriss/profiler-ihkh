@@ -4,11 +4,13 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
+import math
+from time import gmtime, strftime
 # import openpyxl
 # import os
 
 # Set the page config to use the light theme
-st.set_page_config(page_title="Profiler? I Hardly Know Her!", page_icon="📊", initial_sidebar_state="auto")
+st.set_page_config(page_title="Profiler? I Hardly Know Her!", page_icon="📊",layout="wide", initial_sidebar_state="auto")
 
 # Function to load the dataset
 def load_file(uploaded_file):
@@ -19,7 +21,7 @@ def load_file(uploaded_file):
                 first_lines = uploaded_file.read(1024).decode('utf-8')
                 uploaded_file.seek(0)  # Reset file pointer
                 delimiter = ',' if first_lines.count(',') > first_lines.count(';') else ';'
-                df = pl.read_csv(uploaded_file, separator=delimiter,truncate_ragged_lines=True)
+                df = pl.read_csv(uploaded_file, separator=delimiter,truncate_ragged_lines=True,infer_schema_length=10000)
             except Exception as e:
                 st.error(f"Error loading file: {e}")
                 return None
@@ -30,6 +32,9 @@ def load_file(uploaded_file):
         else:
             st.error("Unsupported file format.")
             return None
+        tab1, tab2 = st.tabs(["Data Profiler", "Data Explorer"])
+        df = df.filter(~pl.all_horizontal(pl.all().is_null()))
+        st.session_state.dataframe = df
         return df
     return None
 
@@ -45,38 +50,99 @@ def show_data_profile(df):
         summary_data = {
             "Column": [],
             "Type": [],
+            "Category":[],
             "Unique Values": [],
+            "Non-null values": [],
+            "Entropy": [],
+            "Efficiency": [],
             "Max": [],
             "Min": [],
             "μ": [],
+            "σ": [],
             "Median": [],
-            "σ": []
+            "Mode": [],
+            "Skewness": []
         }
         
         for col in df.columns:
             summary_data["Column"].append(col)
             summary_data["Type"].append(str(df[col].dtype))
-            summary_data["Unique Values"].append(df[col].n_unique())
+
+            total = df.shape[0] - sum(df.select(pl.all().is_null())[col])
+            summary_data["Non-null values"].append(total)
+
+            unique_values = df[col].n_unique()
+            summary_data["Unique Values"].append(unique_values)
+            
+            # Compute entropy
+            counts = df[col].drop_nulls().value_counts()['count']
+            entropy_value = -sum((count / total) * math.log2(count / total) for count in counts)
+            summary_data["Entropy"].append(round(entropy_value,2))
+            
+            # Compute Shannon Density (Normalized Entropy)
+            if unique_values > 1:
+                efficiency = entropy_value / math.log2(unique_values)
+            else:
+                efficiency = 0
+            summary_data["Efficiency"].append(round(efficiency,2))
+
+            # Determine category
+            if unique_values == 1:
+                category = "Fixed"
+            elif df[col].dtype == pl.Float64:
+                category = "Informative"
+            elif unique_values == len(df):
+                category = "ID-like"
+            elif (df[col].dtype in [pl.Utf8, pl.Categorical]) and ((unique_values<=20 and round(efficiency,2)>=.9) or round(entropy_value, 2) == round(math.log2(unique_values), 2)):
+                category = "Categorical (balanced)"
+            elif (df[col].dtype in [pl.Utf8, pl.Categorical]) and ((unique_values<=20 and round(efficiency,2)<.9) or entropy_value < 1):
+                category = "Categorical (imbalanced)"
+            elif unique_values / total > 0.9:
+                category = "Mostly unique"
+            else:
+                category = "Informative"
+            
+            summary_data["Category"].append(category)
+            
             summary_data["Max"].append(df[col].max())
             summary_data["Min"].append(df[col].min())
-            def format_value(value):
-                if isinstance(value, (int, float)):
-                    if abs(value) < 0.001 and value != 0:
-                        return f"{value:.2e}"
-                    else:
-                        return round(value, 4)
-                return value
+            summary_data["μ"].append(df[col].mean())
+            summary_data["Median"].append(df[col].median())
 
-            summary_data["μ"].append(format_value(df[col].mean()))
-            summary_data["Median"].append(format_value(df[col].median()))
             if df[col].dtype in [pl.Utf8, pl.Categorical]:
                 summary_data["σ"].append("")
             else:
-                summary_data["σ"].append(format_value(df[col].std()))
-        
+                summary_data["σ"].append(round(df[col].std(), 2))
+
+            # Compute Mode
+            mode_value = df[col].value_counts().row(0)[0]  # Taking the most frequent value
+            summary_data["Mode"].append(mode_value)
+
+            # Compute Skewness
+            if df[col].dtype not in [pl.Utf8, pl.Categorical]:
+                # Remove None values
+                valid_values = [x for x in df[col] if x is not None]
+                
+                if len(valid_values) > 1:  # Ensure at least 2 values for meaningful skewness
+                    mean = sum(valid_values) / len(valid_values)
+                    std_dev = (sum((x - mean) ** 2 for x in valid_values) / len(valid_values)) ** 0.5
+                    
+                    if std_dev > 0:
+                        skewness = sum(((x - mean) / std_dev) ** 3 for x in valid_values) / len(valid_values)
+                    else:
+                        skewness = 0  # If standard deviation is 0, skewness is undefined
+                    
+                    summary_data["Skewness"].append(round(skewness, 2))
+                else:
+                    summary_data["Skewness"].append("")  # Not enough data for skewness
+            else:
+                summary_data["Skewness"].append("")
+
         # Convert summary data to a Pandas DataFrame for display
         summary_df = pd.DataFrame(summary_data)
-        st.table(summary_df)
+        # st.table(summary_df)
+        st.dataframe(summary_df, height=200)
+
         
         # Heatmap for null values
         
@@ -232,7 +298,7 @@ def show_interactive_plot(df, uploaded_file):
 def export_report(df, uploaded_file):
     if df is not None:
         # Export profiling to text file
-        with open("reports/data_profile_report.txt", "w") as f:
+        with open(f"reports/{uploaded_file.name}_{strftime("%Y%m%d_%H%M%S", gmtime())}_profile.txt", "w") as f:
             f.write("Data Profiling Report\n\n")
             f.write(f"File: {uploaded_file.name}\n")
             f.write(f"Number of rows and columns: {df.shape}\n\n")
@@ -255,15 +321,25 @@ def export_report(df, uploaded_file):
                     f.write(f"St deviation:\t{df[col].std()}\n")
                 f.write("---\n")
 
-        st.success("The report has been saved as a text file.")
+        st.success(f"The report \"{uploaded_file.name}_{strftime("%Y%m%d_%H%M%S", gmtime())}_profile.txt\"has been saved.")
+
+def uploaded():
+    st.session_state.uploader = not(st.session_state.uploader) if 'uploader' in st.session_state else True
 
 # Streamlit interface
 def main():
+
     st.markdown("""
         <style>
         .big-font {
             font-size:40px !important;
             font-weight: bold;
+        }
+        .stFileUploader > label {
+        """ + f'{'display: none;' if 'uploader' in st.session_state and st.session_state.uploader else ''}' + """
+        }
+        .stFileUploader > section {
+        """ + f'{'display: none;' if 'uploader' in st.session_state and st.session_state.uploader else ''}' + """
         }
         </style>
         """, unsafe_allow_html=True)
@@ -271,12 +347,27 @@ def main():
     st.title("Profiler :grey[:small[I Hardly Know Her!]]")
 
     # File upload
-    uploaded_file = st.file_uploader("Upload your dataset (CSV, Excel, TXT)", type=["csv", "xlsx", "txt"])
+    uploaded_file = st.file_uploader("Upload your dataset (CSV, Excel, TXT)",accept_multiple_files=False,on_change=uploaded, type=["csv", "xlsx", "txt"]) 
 
     # Load dataset
-    df = load_file(uploaded_file)
+    df = load_file(uploaded_file) 
 
     if df is not None:
+        sql_query = st.text_area('SQL Query',placeholder='SELECT * FROM self WHERE ...',key="sql_query")
+        df = df.sql(sql_query) if st.session_state.sql_query.strip() and st.session_state.filter=='filtered' else st.session_state.dataframe
+        if "filter" not in st.session_state:
+            st.session_state.filter = 0
+
+        if st.session_state.filter == 0:
+            if st.button('Apply filters', use_container_width=True) and sql_query.strip():
+                st.session_state.filter = 'filtered'
+                st.rerun()
+
+        elif st.session_state.filter == 'filtered':
+            if st.button('Delete filters', use_container_width=True):
+                st.session_state.filter = 0
+                st.rerun()
+
         st.write("Here is a preview of your data:")
         st.dataframe(df.to_pandas(), height=200)
 
