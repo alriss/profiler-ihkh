@@ -1,5 +1,6 @@
 ```bash
 Profiler-IHKH/
+
 ├── app.py                    # Il file principale che esegue l'applicazione Streamlit
 ├── requirements.txt          # Le librerie necessarie per il progetto
 ├── assets/                   # Cartella per eventuali file statici (icone, immagini, ecc.)
