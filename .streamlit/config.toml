@@ -1,0 +1,13 @@
+[server]
+port = 80
+runOnSave = true
+[theme]
+primaryColor = "#333542"
+backgroundColor = "#f1f2f6"
+secondaryBackgroundColor = "#fff"
+font = "sans-serif"
+borderColor = "#b1b5cc"
+headingFont = "#333542"
+[theme.sidebar]
+backgroundColor = "#333542"
+secondaryBackgroundColor = "#fff"

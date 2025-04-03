@@ -5,12 +5,22 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
 import math
-from time import gmtime, strftime
+from time import strftime, gmtime
+from streamlit_option_menu import option_menu
+import numpy as np
 # import openpyxl
 # import os
 
+def format_size(size_in_bytes):
+    units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+    i = 0
+    while size_in_bytes >= 1024 and i < len(units) - 1:
+        size_in_bytes /= 1024.0
+        i += 1
+    return f"{size_in_bytes:.2f} {units[i]}"
+
 # Set the page config to use the light theme
-st.set_page_config(page_title="Profiler? I Hardly Know Her!", page_icon="📊",layout="wide", initial_sidebar_state="auto")
+st.set_page_config(page_title="Profiler? I Hardly Know Her!", page_icon="📊",layout="wide", initial_sidebar_state="expanded")
 
 # Function to load the dataset
 def load_file(uploaded_file):
@@ -32,7 +42,6 @@ def load_file(uploaded_file):
         else:
             st.error("Unsupported file format.")
             return None
-        tab1, tab2 = st.tabs(["Data Profiler", "Data Explorer"])
         df = df.filter(~pl.all_horizontal(pl.all().is_null()))
         st.session_state.dataframe = df
         return df
@@ -42,9 +51,6 @@ def load_file(uploaded_file):
 def show_data_profile(df):
     if df is not None:
         st.subheader("Data Profiling")
-        
-        # Basic statistics with Polars
-        st.write("**Number of rows and columns:**", df.shape)
         
         # Create a summary table for all columns
         summary_data = {
@@ -61,7 +67,8 @@ def show_data_profile(df):
             "σ": [],
             "Median": [],
             "Mode": [],
-            "Skewness": []
+            "Skewness": [],
+            "Histogram": []
         }
         
         for col in df.columns:
@@ -138,10 +145,30 @@ def show_data_profile(df):
             else:
                 summary_data["Skewness"].append("")
 
+            # **Generate Histogram for Numeric Columns**
+            if df[col].dtype in [pl.Float64, pl.Int64]:
+                hist, bin_edges = np.histogram(df[col].drop_nulls().to_numpy())
+                summary_data["Histogram"].append(hist.tolist())  # Store histogram as a list
+            else:
+                # Compute frequency of unique values for categorical/text columns
+                value_counts = df[col].drop_nulls().value_counts()
+                summary_data["Histogram"].append(value_counts["count"].to_list())  # Store frequencies
+
         # Convert summary data to a Pandas DataFrame for display
         summary_df = pd.DataFrame(summary_data)
         # st.table(summary_df)
-        st.dataframe(summary_df, height=200)
+        st.dataframe(
+            summary_df,
+            column_config={
+                "Histogram": st.column_config.BarChartColumn(
+                    "Distribution",
+                    help="Histogram of column values",
+                    y_min=0
+                ),
+            },
+            hide_index=True,
+            height=500
+        )
 
         
         # Heatmap for null values
@@ -331,67 +358,118 @@ def main():
 
     st.markdown("""
         <style>
+        div.stMainBlockContainer  {
+        }
         .big-font {
             font-size:40px !important;
             font-weight: bold;
         }
+        div[data-testid="stSidebarHeader"]{
+            display: none !important;        
+        }
+        header[data-testid="stHeader"].stAppHeader, header[data-testid="stHeader"].stAppHeader * {
+            display: none !important;
+        }
+        .stMainBlockContainer {
+                padding-top: 0!important;}
         .stFileUploader > label {
-        """ + f'{'display: none;' if 'uploader' in st.session_state and st.session_state.uploader else ''}' + """
+        """ + f'{'display: none !important;' if 'uploader' in st.session_state and st.session_state.uploader else ''}' + """
         }
         .stFileUploader > section {
-        """ + f'{'display: none;' if 'uploader' in st.session_state and st.session_state.uploader else ''}' + """
+        """ + f'{'display: none !important;' if 'uploader' in st.session_state and st.session_state.uploader else ''}' + """
         }
+        .stMetric {
+            border-radius: 15px;
+            padding: 5px;
+            padding-left:15px;
+            border: 0 !important;
+            background: white;
+        }
+        .stMetric * {
+            color: #333542;
+        }
+
+        .dvn-underlay .canvas * {
+            background-color: white !important;
+        }
+
         </style>
         """, unsafe_allow_html=True)
 
-    st.title("Profiler :grey[:small[I Hardly Know Her!]]")
+    st.sidebar.title('Profiler :grey[:small[I Hardly Know Her!]]')
 
     # File upload
-    uploaded_file = st.file_uploader("Upload your dataset (CSV, Excel, TXT)",accept_multiple_files=False,on_change=uploaded, type=["csv", "xlsx", "txt"]) 
+    
+    with st.sidebar:
+        if 'uploader' in st.session_state and st.session_state.uploader :
+            st.write('Uploaded dataset')
+        
+        uploaded_file = st.file_uploader("Upload your dataset",accept_multiple_files=False,on_change=uploaded, type=["csv", "xlsx", "txt"]) 
 
     # Load dataset
     df = load_file(uploaded_file) 
+    with st.sidebar:
+        if 'uploader' in st.session_state and st.session_state.uploader :
+            selected = option_menu(None, ["Overview","Profiler", 'Explorer'], 
+                icons=['house','clipboard-data', 'graph-up'], menu_icon="cast", default_index=0,
+                styles={
+                    "container": {"padding": "0!important", "background-color": "transparent"},
+                    "icon": { "font-size": "20px"}, 
+                    #"nav-link": {"font-size": "25px", "text-align": "left", "margin":"0px", "--hover-color": "#eee"},
+                    # "nav-link-selected": {"background-color": "#fff"},
+                })
+            if st.button(label="Download Report",icon=":material/download:",use_container_width=True):
+                export_report(df, uploaded_file)
 
     if df is not None:
-        sql_query = st.text_area('SQL Query',placeholder='SELECT * FROM self WHERE ...',key="sql_query")
-        df = df.sql(sql_query) if st.session_state.sql_query.strip() and st.session_state.filter=='filtered' else st.session_state.dataframe
-        if "filter" not in st.session_state:
-            st.session_state.filter = 0
-
-        if st.session_state.filter == 0:
-            if st.button('Apply filters', use_container_width=True) and sql_query.strip():
-                st.session_state.filter = 'filtered'
-                st.rerun()
-
-        elif st.session_state.filter == 'filtered':
-            if st.button('Delete filters', use_container_width=True):
-                st.session_state.filter = 0
-                st.rerun()
-
-        st.write("Here is a preview of your data:")
-        st.dataframe(df.to_pandas(), height=200)
-
-        left, middle, right = st.columns(3)
-
-        # Initialize session state for active button
-        if "active_button" not in st.session_state:
-            st.session_state.active_button = 0
-
-        # Button clicks update session state
-        if left.button("Data Profiling", use_container_width=True):
-            st.session_state.active_button = 1
-        if middle.button("Interactive Plot", use_container_width=True):
-            st.session_state.active_button = 2
-        if right.button("Export Report", use_container_width=True):
-            st.session_state.active_button = 3
 
         # Execute the corresponding function based on the active button
-        if st.session_state.active_button == 1:
+        if selected=='Overview':
+            
+            kpi0, kpi1, kpi2, kpi3, kpi4 = st.columns(5)
+
+            with kpi0:
+                st.metric("File size", format_size(uploaded_file.size), border = True)
+            
+            with kpi1:
+                st.metric("Rows", df.shape[0], border = True)
+            
+            with kpi2:
+                st.metric("Columns", df.shape[1], border = True)
+            
+            with kpi3:
+                st.metric("Null values", sum(df.select(pl.all().is_null()).sum()), border = True)
+           
+            with kpi4:
+                st.metric("Completeness", str(round(100*(1-sum(df.select(pl.all().is_null()).sum()).item()/(df.shape[0]*df.shape[1])),2))+'%', border = True)
+
+            df = df.sql(st.session_state.sql_query) if 'sql_query' in st.session_state and st.session_state.sql_query.strip() and st.session_state.filter=='filtered' else st.session_state.dataframe
+            st.dataframe(df.to_pandas().style.applymap(lambda x: 'background-color: white'), height= 460)
+
+            col1, col2 = st.columns([0.75, 0.25], vertical_alignment='bottom')
+            
+            with col1:
+                sql_query = st.text_input('Write a SQL query to filter the dataset', placeholder='SELECT * FROM self WHERE ...',key="sql_query")
+                df = df.sql(sql_query) if st.session_state.sql_query.strip() and st.session_state.filter=='filtered' else st.session_state.dataframe
+                
+            if "filter" not in st.session_state:
+                st.session_state.filter = 0
+            with col2:
+                if st.session_state.filter == 0:
+                    if st.button('Apply filters', use_container_width=True) and sql_query.strip():
+                        st.session_state.filter = 'filtered'
+                        st.rerun()
+
+                elif st.session_state.filter == 'filtered':
+                    if st.button('Delete filters', use_container_width=True):
+                        st.session_state.filter = 0
+                        st.rerun()
+
+        if selected=="Profiler":
             show_data_profile(df)
-        if st.session_state.active_button == 2:
+        if selected=="Explorer":
             show_interactive_plot(df, uploaded_file)
-        if st.session_state.active_button == 3:
-            export_report(df, uploaded_file)
+
 
 if __name__ == "__main__":
     main()
