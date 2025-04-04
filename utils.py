@@ -1,3 +1,4 @@
+from time import strftime, gmtime
 import streamlit as st
 import polars as pl
 import plotly.express as px
@@ -5,22 +6,10 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
 import math
-from time import strftime, gmtime
-from streamlit_option_menu import option_menu
 import numpy as np
-# import openpyxl
-# import os
 
-def format_size(size_in_bytes):
-    units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
-    i = 0
-    while size_in_bytes >= 1024 and i < len(units) - 1:
-        size_in_bytes /= 1024.0
-        i += 1
-    return f"{size_in_bytes:.2f} {units[i]}"
-
-# Set the page config to use the light theme
-st.set_page_config(page_title="Profiler? I Hardly Know Her!", page_icon="📊",layout="wide", initial_sidebar_state="expanded")
+def uploaded():
+    st.session_state.uploader = not(st.session_state.uploader) if 'uploader' in st.session_state else True
 
 # Function to load the dataset
 def load_file(uploaded_file):
@@ -47,21 +36,45 @@ def load_file(uploaded_file):
         return df
     return None
 
+def format_size(size_in_bytes):
+    units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+    i = 0
+    while size_in_bytes >= 1024 and i < len(units) - 1:
+        size_in_bytes /= 1024.0
+        i += 1
+    return f"{size_in_bytes:.2f} {units[i]}"
+
+# Function to export the report
+def export_report(df, uploaded_file):
+    if df is not None:
+        # Export profiling to text file
+        with open(f"reports/{uploaded_file.name}_{strftime("%Y%m%d_%H%M%S", gmtime())}_profile.txt", "w") as f:
+            f.write("Data Profiling Report\n\n")
+            f.write(f"File: {uploaded_file.name}\n")
+            f.write(f"Number of rows and columns: {df.shape}\n\n")
+            f.write("Columns:\n")
+            for c in df.columns:
+                f.write(f"- {c}\n")
+
+            f.write("\n")
+            for col in df.columns:
+                f.write(f"Column:\t\t{col}\n")
+                f.write(f"Type:\t\t{df[col].dtype}\n")
+                f.write(f"Unique values:\t{df[col].n_unique()}\n")
+                f.write(f"Max:\t\t{df[col].max()}\n")
+                f.write(f"Min:\t\t{df[col].min()}\n")
+                f.write(f"Mean:\t\t{df[col].mean()}\n")
+                f.write(f"Median:\t\t{df[col].median()}\n")
+                if df[col].dtype in [pl.Utf8, pl.Categorical]:
+                    f.write("St deviation:\tNone\n")
+                else:
+                    f.write(f"St deviation:\t{df[col].std()}\n")
+                f.write("---\n")
+
 # Function to show data profiling
 def show_data_profile(df):
     if df is not None:
-        option_map = {
-            0: "Column info",
-            1: "Null values",
-        }
-        st.segmented_control(
-            label = None,
-            options=option_map.keys(),
-            format_func=lambda option: option_map[option],
-            selection_mode="single",
-            default=0,
-
-        )
+        st.subheader("Data Profiling")
         
         # Create a summary table for all columns
         summary_data = {
@@ -167,24 +180,7 @@ def show_data_profile(df):
 
         # Convert summary data to a Pandas DataFrame for display
         summary_df = pd.DataFrame(summary_data)
-
-        def category_bar_style(val):
-
-            map_val = {
-                "Fixed" : "red",
-                "Informative" : "green",
-                "ID-like" : "darkgoldenrod",
-                "Categorical (balanced)" : "royalblue",
-                "Categorical (imbalanced)" : "mediumorchid",
-                "Mostly unique" : "sienna"
-            }
-
-            return (
-                f"color: {map_val[val]}"
-            )
-
-        summary_df = summary_df.style.map(category_bar_style, subset=['Category'])
-
+        # st.table(summary_df)
         st.dataframe(
             summary_df,
             column_config={
@@ -195,7 +191,7 @@ def show_data_profile(df):
                 ),
             },
             hide_index=True,
-            height=600
+            height=500
         )
 
         
@@ -312,6 +308,22 @@ def show_data_profile(df):
             vertical_spacing=0.05
         )
 
+        for i,c in enumerate(df.columns):
+            hist = go.Histogram(
+                x=df[c], 
+                nbinsx= None if df[c].dtype in [pl.Float64, pl.Int64] else df[c].n_unique(), 
+                histnorm='probability density',
+                marker=dict(color="#01203b")  # Set color for all histograms
+            )
+            fig.add_trace(hist, row=(i//3)+1, col=(i%3)+1)
+        fig.update_layout(
+            height=200*round(len(df.columns)-.5)+1,
+            showlegend=False,  # Remove legend
+            title_text="Histograms of Dataset Columns",
+            bargap=0.01
+        )
+        st.plotly_chart(fig)
+
 # Function to show an interactive plot
 # Function to show an interactive plot
 def show_interactive_plot(df, uploaded_file):
@@ -333,158 +345,3 @@ def show_interactive_plot(df, uploaded_file):
         plot = px.scatter(df.to_pandas(), x=st.session_state.x_axis, y=st.session_state.y_axis)
         st.plotly_chart(plot)
 
-# Function to export the report
-def export_report(df, uploaded_file):
-    if df is not None:
-        # Export profiling to text file
-        with open(f"reports/{uploaded_file.name}_{strftime("%Y%m%d_%H%M%S", gmtime())}_profile.txt", "w") as f:
-            f.write("Data Profiling Report\n\n")
-            f.write(f"File: {uploaded_file.name}\n")
-            f.write(f"Number of rows and columns: {df.shape}\n\n")
-            f.write("Columns:\n")
-            for c in df.columns:
-                f.write(f"- {c}\n")
-
-            f.write("\n")
-            for col in df.columns:
-                f.write(f"Column:\t\t{col}\n")
-                f.write(f"Type:\t\t{df[col].dtype}\n")
-                f.write(f"Unique values:\t{df[col].n_unique()}\n")
-                f.write(f"Max:\t\t{df[col].max()}\n")
-                f.write(f"Min:\t\t{df[col].min()}\n")
-                f.write(f"Mean:\t\t{df[col].mean()}\n")
-                f.write(f"Median:\t\t{df[col].median()}\n")
-                if df[col].dtype in [pl.Utf8, pl.Categorical]:
-                    f.write("St deviation:\tNone\n")
-                else:
-                    f.write(f"St deviation:\t{df[col].std()}\n")
-                f.write("---\n")
-
-        st.success(f"The report \"{uploaded_file.name}_{strftime("%Y%m%d_%H%M%S", gmtime())}_profile.txt\"has been saved.")
-
-def uploaded():
-    st.session_state.uploader = not(st.session_state.uploader) if 'uploader' in st.session_state else True
-
-# Streamlit interface
-def main():
-
-    st.markdown("""
-        <style>
-        div.stMainBlockContainer  {
-            overflow-y: hidden;
-        }
-        .big-font {
-            font-size:40px !important;
-            font-weight: bold;
-        }
-        div[data-testid="stSidebarHeader"]{
-            display: none !important;        
-        }
-        header[data-testid="stHeader"].stAppHeader, header[data-testid="stHeader"].stAppHeader * {
-            display: none !important;
-        }
-        .stMainBlockContainer {
-                padding-top: 0!important;}
-        .stFileUploader > label {
-        """ + f'{'display: none !important;' if 'uploader' in st.session_state and st.session_state.uploader else ''}' + """
-        }
-        .stFileUploader > section {
-        """ + f'{'display: none !important;' if 'uploader' in st.session_state and st.session_state.uploader else ''}' + """
-        }
-        .stMetric {
-            border-radius: 15px;
-            padding: 5px;
-            padding-left:15px;
-            border: 0 !important;
-            background: white;
-        }
-        .stMetric * {
-            color: #333542;
-        }
-
-        .dvn-underlay .canvas * {
-            background-color: white !important;
-        }
-
-        </style>
-        """, unsafe_allow_html=True)
-
-    st.sidebar.title('Profiler :grey[:small[I Hardly Know Her!]]')
-
-    # File upload
-    
-    with st.sidebar:
-        if 'uploader' in st.session_state and st.session_state.uploader :
-            st.write('Uploaded dataset')
-        
-        uploaded_file = st.file_uploader("Upload your dataset",accept_multiple_files=False,on_change=uploaded, type=["csv", "xlsx", "txt"]) 
-
-    # Load dataset
-    df = load_file(uploaded_file) 
-    with st.sidebar:
-        if 'uploader' in st.session_state and st.session_state.uploader :
-            selected = option_menu(None, ["Overview","Profiler", 'Explorer'], 
-                icons=['house','clipboard-data', 'graph-up'], menu_icon="cast", default_index=0,
-                styles={
-                    "container": {"padding": "0!important", "background-color": "transparent"},
-                    "icon": { "font-size": "20px"}, 
-                    #"nav-link": {"font-size": "25px", "text-align": "left", "margin":"0px", "--hover-color": "#eee"},
-                    # "nav-link-selected": {"background-color": "#fff"},
-                })
-            if st.button(label="Download Report",icon=":material/download:",use_container_width=True):
-                export_report(df, uploaded_file)
-
-    if df is not None:
-
-        # Execute the corresponding function based on the active button
-        if selected=='Overview':
-            
-            st.metric("File name", uploaded_file.name, border = True)
-
-            kpi0, kpi1, kpi2, kpi3, kpi4 = st.columns(5)
-
-            with kpi0:
-                st.metric("File size", format_size(uploaded_file.size), border = True)
-            
-            with kpi1:
-                st.metric("Rows", df.shape[0], border = True)
-            
-            with kpi2:
-                st.metric("Columns", df.shape[1], border = True)
-            
-            with kpi3:
-                st.metric("Null values", sum(df.select(pl.all().is_null()).sum()), border = True)
-           
-            with kpi4:
-                st.metric("Completeness", str(round(100*(1-sum(df.select(pl.all().is_null()).sum()).item()/(df.shape[0]*df.shape[1])),2))+'%', border = True)
-
-            df = df.sql(st.session_state.sql_query) if 'sql_query' in st.session_state and st.session_state.sql_query.strip() and st.session_state.filter=='filtered' else st.session_state.dataframe
-            st.dataframe(df.to_pandas().style.applymap(lambda x: 'background-color: white'), height= 360)
-
-            col1, col2 = st.columns([0.75, 0.25], vertical_alignment='bottom')
-            
-            with col1:
-                sql_query = st.text_input('Write a SQL query to filter the dataset', placeholder='SELECT * FROM self WHERE ...',key="sql_query")
-                df = df.sql(sql_query) if st.session_state.sql_query.strip() and st.session_state.filter=='filtered' else st.session_state.dataframe
-                
-            if "filter" not in st.session_state:
-                st.session_state.filter = 0
-            with col2:
-                if st.session_state.filter == 0:
-                    if st.button('Apply filters', use_container_width=True) and sql_query.strip():
-                        st.session_state.filter = 'filtered'
-                        st.rerun()
-
-                elif st.session_state.filter == 'filtered':
-                    if st.button('Delete filters', use_container_width=True):
-                        st.session_state.filter = 0
-                        st.rerun()
-
-        if selected=="Profiler":
-            show_data_profile(df)
-        if selected=="Explorer":
-            show_interactive_plot(df, uploaded_file)
-
-
-if __name__ == "__main__":
-    main()
