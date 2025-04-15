@@ -8,8 +8,7 @@ import math
 from time import strftime, gmtime
 from streamlit_option_menu import option_menu
 import numpy as np
-# import openpyxl
-# import os
+
 
 def format_size(size_in_bytes):
     units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
