@@ -8,6 +8,7 @@ import math
 from time import strftime, gmtime
 from streamlit_option_menu import option_menu
 import numpy as np
+from statsmodels.nonparametric.smoothers_lowess import lowess
 
 
 def format_size(size_in_bytes):
@@ -53,7 +54,7 @@ def show_data_profile(df):
             0: "Column info",
             1: "Null values",
         }
-        st.segmented_control(
+        profiler_options = st.segmented_control(
             label = None,
             options=option_map.keys(),
             format_func=lambda option: option_map[option],
@@ -61,255 +62,258 @@ def show_data_profile(df):
             default=0,
 
         )
-        
-        # Create a summary table for all columns
-        summary_data = {
-            "Column": [],
-            "Type": [],
-            "Category":[],
-            "Unique Values": [],
-            "Non-null values": [],
-            "Entropy": [],
-            "Efficiency": [],
-            "Max": [],
-            "Min": [],
-            "μ": [],
-            "σ": [],
-            "Median": [],
-            "Mode": [],
-            "Skewness": [],
-            "Histogram": []
-        }
-        
-        for col in df.columns:
-            summary_data["Column"].append(col)
-            summary_data["Type"].append(str(df[col].dtype))
 
-            total = df.shape[0] - sum(df.select(pl.all().is_null())[col])
-            summary_data["Non-null values"].append(total)
-
-            unique_values = df[col].n_unique()
-            summary_data["Unique Values"].append(unique_values)
+        if profiler_options==1:
+            # Heatmap for null values
             
-            # Compute entropy
-            counts = df[col].drop_nulls().value_counts()['count']
-            entropy_value = -sum((count / total) * math.log2(count / total) for count in counts)
-            summary_data["Entropy"].append(round(entropy_value,2))
-            
-            # Compute Shannon Density (Normalized Entropy)
-            if unique_values > 1:
-                efficiency = entropy_value / math.log2(unique_values)
-            else:
-                efficiency = 0
-            summary_data["Efficiency"].append(round(efficiency,2))
+            # Create heatmap data (convert to 1s and 0s for null presence)
+            heatmap_data = df.select(pl.all().is_null()).transpose().to_numpy().astype(int)
 
-            # Determine category
-            if unique_values == 1:
-                category = "Fixed"
-            elif df[col].dtype == pl.Float64:
-                category = "Informative"
-            elif unique_values == len(df):
-                category = "ID-like"
-            elif (df[col].dtype in [pl.Utf8, pl.Categorical]) and ((unique_values<=20 and round(efficiency,2)>=.9) or round(entropy_value, 2) == round(math.log2(unique_values), 2)):
-                category = "Categorical (balanced)"
-            elif (df[col].dtype in [pl.Utf8, pl.Categorical]) and ((unique_values<=20 and round(efficiency,2)<.9) or entropy_value < 1):
-                category = "Categorical (imbalanced)"
-            elif unique_values / total > 0.9:
-                category = "Mostly unique"
-            else:
-                category = "Informative"
-            
-            summary_data["Category"].append(category)
-            
-            summary_data["Max"].append(df[col].max())
-            summary_data["Min"].append(df[col].min())
-            summary_data["μ"].append(df[col].mean())
-            summary_data["Median"].append(df[col].median())
+            # Compute null value frequency (%) by row
+            null_frequencies_by_row = (heatmap_data.sum(axis=0) / df.shape[1]) * 100
+            x_vals = list(range(len(null_frequencies_by_row)))
 
-            if df[col].dtype in [pl.Utf8, pl.Categorical]:
-                summary_data["σ"].append("")
-            else:
-                summary_data["σ"].append(round(df[col].std(), 2))
+            # Compute null value frequency (%) by column
+            null_frequencies_by_column = (df.select(pl.all().is_null()).sum().to_numpy().flatten() / df.shape[0]) * 100
+            y_vals = list(range(len(null_frequencies_by_column)))
 
-            # Compute Mode
-            mode_value = df[col].value_counts().row(0)[0]  # Taking the most frequent value
-            summary_data["Mode"].append(mode_value)
+            row_height=30
+            freq_height=90
 
-            # Compute Skewness
-            if df[col].dtype not in [pl.Utf8, pl.Categorical]:
-                # Remove None values
-                valid_values = [x for x in df[col] if x is not None]
-                
-                if len(valid_values) > 1:  # Ensure at least 2 values for meaningful skewness
-                    mean = sum(valid_values) / len(valid_values)
-                    std_dev = (sum((x - mean) ** 2 for x in valid_values) / len(valid_values)) ** 0.5
-                    
-                    if std_dev > 0:
-                        skewness = sum(((x - mean) / std_dev) ** 3 for x in valid_values) / len(valid_values)
-                    else:
-                        skewness = 0  # If standard deviation is 0, skewness is undefined
-                    
-                    summary_data["Skewness"].append(round(skewness, 2))
-                else:
-                    summary_data["Skewness"].append("")  # Not enough data for skewness
-            else:
-                summary_data["Skewness"].append("")
-
-            # **Generate Histogram for Numeric Columns**
-            if df[col].dtype in [pl.Float64, pl.Int64]:
-                hist, bin_edges = np.histogram(df[col].drop_nulls().to_numpy())
-                summary_data["Histogram"].append(hist.tolist())  # Store histogram as a list
-            else:
-                # Compute frequency of unique values for categorical/text columns
-                value_counts = df[col].drop_nulls().value_counts()
-                summary_data["Histogram"].append(value_counts["count"].to_list())  # Store frequencies
-
-        # Convert summary data to a Pandas DataFrame for display
-        summary_df = pd.DataFrame(summary_data)
-
-        def category_bar_style(val):
-
-            map_val = {
-                "Fixed" : "red",
-                "Informative" : "green",
-                "ID-like" : "darkgoldenrod",
-                "Categorical (balanced)" : "royalblue",
-                "Categorical (imbalanced)" : "mediumorchid",
-                "Mostly unique" : "sienna"
-            }
-
-            return (
-                f"color: {map_val[val]}"
+            # Create subplots with 3 panels: heatmap, horizontal line chart (row nulls), vertical line chart (column nulls)
+            fig = make_subplots(
+                rows=2, cols=2,
+                shared_xaxes=True,
+                shared_yaxes=True,
+                row_heights=[row_height*len(df.columns)/(freq_height+row_height*len(df.columns)), freq_height/(freq_height+row_height*len(df.columns))],  # Make right panel smaller
+                column_widths=[0.85, 0.15],  # Make right panel smaller
+                vertical_spacing=0.1,
+                horizontal_spacing=0.05
             )
 
-        summary_df = summary_df.style.map(category_bar_style, subset=['Category'])
+            # Add heatmap
+            heatmap_trace = go.Heatmap(
+                z=heatmap_data,
+                colorscale=["#01203b", "white"],  # Missing values are white
+                showscale=False,
+                ygap=2
+            )
+            fig.add_trace(heatmap_trace, row=1, col=1)
 
-        st.dataframe(
-            summary_df,
-            column_config={
-                "Histogram": st.column_config.BarChartColumn(
-                    "Distribution",
-                    help="Histogram of column values",
-                    y_min=0
+            # Add actual null frequency bars
+            bar_trace_col = go.Bar(
+                x=x_vals,  # Main data
+                y=null_frequencies_by_row,
+                marker=dict(color="#01203b"),
+                name="Nulls (%) by Row"
+            )
+
+            # Add complementary bars (100 - null frequency)
+            bar_trace_complement = go.Bar(
+                x=x_vals,  # Remaining part
+                y=100 - null_frequencies_by_row,
+                marker=dict(color="#cfcfcf"),
+                name="Non-Null (%)",
+                showlegend=False  # Optional: Hide legend for cleaner look
+            )
+
+            # Add both traces to the figure
+            fig.add_trace(bar_trace_col, row=2, col=1)  # Foreground bar
+            fig.add_trace(bar_trace_complement, row=2, col=1)  # Background bar
+
+            # Enable stacking
+            fig.update_layout(barmode='stack')
+
+            # Add actual null frequency bars
+            bar_trace_col = go.Bar(
+                x=null_frequencies_by_column,  # Main data
+                y=y_vals,
+                orientation='h',  # Horizontal bars
+                marker=dict(color="#01203b"),
+                name="Nulls (%) by Column"
+            )
+
+            # Add complementary bars (100 - null frequency)
+            bar_trace_complement = go.Bar(
+                x=100 - null_frequencies_by_column,  # Remaining part
+                y=y_vals,
+                orientation='h',
+                marker=dict(color="#cfcfcf"),
+                name="Non-Null (%)",
+                showlegend=False  # Optional: Hide legend for cleaner look
+            )
+
+            # Add both traces to the figure
+            fig.add_trace(bar_trace_col, row=1, col=2)  # Foreground bar
+            fig.add_trace(bar_trace_complement, row=1, col=2)  # Background bar
+
+            # Enable stacking
+            fig.update_layout(barmode='stack')
+
+            # Update layout
+            fig.update_layout(
+                xaxis2=dict(title="Nulls (%) by Column",showticklabels=True),  # X-axis for row null frequency chart
+                # xaxis=dict(showticklabels=False),
+                # yaxis=dict(showticklabels=False),
+                yaxis=dict(
+                    title="Columns",
+                    tickmode="array",
+                    tickvals=list(range(len(df.columns))),
+                    ticktext=df.columns
                 ),
-            },
-            hide_index=True,
-            height=600
-        )
+                yaxis2=dict(autorange="reversed"),
+                xaxis3=dict(title="Nulls (%) by Row"),  # X-axis for column null frequency chart
+                yaxis3=dict(autorange="reversed",showticklabels=True),  # Hide y-axis ticks for column null frequency chart
+                title='Heatmap',
+                height=(100+freq_height+row_height*len(df.columns))
+            )
 
-        
-        # Heatmap for null values
-        
-        # Create heatmap data (convert to 1s and 0s for null presence)
-        heatmap_data = df.select(pl.all().is_null()).transpose().to_numpy().astype(int)
+            # Show figure
+            st.plotly_chart(fig)
 
-        # Compute null value frequency (%) by row
-        null_frequencies_by_row = (heatmap_data.sum(axis=0) / df.shape[1]) * 100
-        x_vals = list(range(len(null_frequencies_by_row)))
+            fig = make_subplots(
+                rows=round(len(df.columns)-.5)+1, cols=3,
+                subplot_titles=df.columns,
+                vertical_spacing=0.05
+            )
+        else:
+            # Create a summary table for all columns
+            summary_data = {
+                "Column": [],
+                "Type": [],
+                "Category":[],
+                "Unique Values": [],
+                "Non-null values": [],
+                "Entropy": [],
+                "Efficiency": [],
+                "Max": [],
+                "Min": [],
+                "μ": [],
+                "σ": [],
+                "Median": [],
+                "Mode": [],
+                "Skewness": [],
+                "Histogram": []
+            }
+            
+            for col in df.columns:
+                summary_data["Column"].append(col)
+                summary_data["Type"].append(str(df[col].dtype))
 
-        # Compute null value frequency (%) by column
-        null_frequencies_by_column = (df.select(pl.all().is_null()).sum().to_numpy().flatten() / df.shape[0]) * 100
-        y_vals = list(range(len(null_frequencies_by_column)))
+                total = df.shape[0] - sum(df.select(pl.all().is_null())[col])
+                summary_data["Non-null values"].append(total)
 
-        row_height=30
-        freq_height=90
+                unique_values = df[col].n_unique()
+                summary_data["Unique Values"].append(unique_values)
+                
+                # Compute entropy
+                counts = df[col].drop_nulls().value_counts()['count']
+                entropy_value = -sum((count / total) * math.log2(count / total) for count in counts)
+                summary_data["Entropy"].append(round(entropy_value,2))
+                
+                # Compute Shannon Density (Normalized Entropy)
+                if unique_values > 1:
+                    efficiency = entropy_value / math.log2(unique_values)
+                else:
+                    efficiency = 0
+                summary_data["Efficiency"].append(round(efficiency,2))
 
-        # Create subplots with 3 panels: heatmap, horizontal line chart (row nulls), vertical line chart (column nulls)
-        fig = make_subplots(
-            rows=2, cols=2,
-            shared_xaxes=True,
-            shared_yaxes=True,
-            row_heights=[row_height*len(df.columns)/(freq_height+row_height*len(df.columns)), freq_height/(freq_height+row_height*len(df.columns))],  # Make right panel smaller
-            column_widths=[0.85, 0.15],  # Make right panel smaller
-            vertical_spacing=0.1,
-            horizontal_spacing=0.05
-        )
+                # Determine category
+                if unique_values == 1:
+                    category = "Fixed"
+                elif df[col].dtype == pl.Float64:
+                    category = "Informative"
+                elif unique_values == len(df):
+                    category = "ID-like"
+                elif (df[col].dtype in [pl.Utf8, pl.Categorical]) and ((unique_values<=20 and round(efficiency,2)>=.9) or round(entropy_value, 2) == round(math.log2(unique_values), 2)):
+                    category = "Categorical (balanced)"
+                elif (df[col].dtype in [pl.Utf8, pl.Categorical]) and ((unique_values<=20 and round(efficiency,2)<.9) or entropy_value < 1):
+                    category = "Categorical (imbalanced)"
+                elif unique_values / total > 0.9:
+                    category = "Mostly unique"
+                else:
+                    category = "Informative"
+                
+                summary_data["Category"].append(category)
+                
+                summary_data["Max"].append(df[col].max())
+                summary_data["Min"].append(df[col].min())
+                summary_data["μ"].append(df[col].mean())
+                summary_data["Median"].append(df[col].median())
 
-        # Add heatmap
-        heatmap_trace = go.Heatmap(
-            z=heatmap_data,
-            colorscale=["#01203b", "white"],  # Missing values are white
-            showscale=False,
-            ygap=2
-        )
-        fig.add_trace(heatmap_trace, row=1, col=1)
+                if df[col].dtype in [pl.Utf8, pl.Categorical]:
+                    summary_data["σ"].append("")
+                else:
+                    summary_data["σ"].append(round(df[col].std(), 2))
 
-        # Add actual null frequency bars
-        bar_trace_col = go.Bar(
-            x=x_vals,  # Main data
-            y=null_frequencies_by_row,
-            marker=dict(color="#01203b"),
-            name="Nulls (%) by Row"
-        )
+                # Compute Mode
+                mode_value = df[col].value_counts().row(0)[0]  # Taking the most frequent value
+                summary_data["Mode"].append(mode_value)
 
-        # Add complementary bars (100 - null frequency)
-        bar_trace_complement = go.Bar(
-            x=x_vals,  # Remaining part
-            y=100 - null_frequencies_by_row,
-            marker=dict(color="#cfcfcf"),
-            name="Non-Null (%)",
-            showlegend=False  # Optional: Hide legend for cleaner look
-        )
+                # Compute Skewness
+                if df[col].dtype not in [pl.Utf8, pl.Categorical]:
+                    # Remove None values
+                    valid_values = [x for x in df[col] if x is not None]
+                    
+                    if len(valid_values) > 1:  # Ensure at least 2 values for meaningful skewness
+                        mean = sum(valid_values) / len(valid_values)
+                        std_dev = (sum((x - mean) ** 2 for x in valid_values) / len(valid_values)) ** 0.5
+                        
+                        if std_dev > 0:
+                            skewness = sum(((x - mean) / std_dev) ** 3 for x in valid_values) / len(valid_values)
+                        else:
+                            skewness = 0  # If standard deviation is 0, skewness is undefined
+                        
+                        summary_data["Skewness"].append(round(skewness, 2))
+                    else:
+                        summary_data["Skewness"].append("")  # Not enough data for skewness
+                else:
+                    summary_data["Skewness"].append("")
 
-        # Add both traces to the figure
-        fig.add_trace(bar_trace_col, row=2, col=1)  # Foreground bar
-        fig.add_trace(bar_trace_complement, row=2, col=1)  # Background bar
+                # **Generate Histogram for Numeric Columns**
+                if df[col].dtype in [pl.Float64, pl.Int64]:
+                    hist, bin_edges = np.histogram(df[col].drop_nulls().to_numpy())
+                    summary_data["Histogram"].append(hist.tolist())  # Store histogram as a list
+                else:
+                    # Compute frequency of unique values for categorical/text columns
+                    value_counts = df[col].drop_nulls().value_counts()
+                    summary_data["Histogram"].append(value_counts["count"].to_list())  # Store frequencies
 
-        # Enable stacking
-        fig.update_layout(barmode='stack')
+            # Convert summary data to a Pandas DataFrame for display
+            summary_df = pd.DataFrame(summary_data)
 
-        # Add actual null frequency bars
-        bar_trace_col = go.Bar(
-            x=null_frequencies_by_column,  # Main data
-            y=y_vals,
-            orientation='h',  # Horizontal bars
-            marker=dict(color="#01203b"),
-            name="Nulls (%) by Column"
-        )
+            def category_bar_style(val):
 
-        # Add complementary bars (100 - null frequency)
-        bar_trace_complement = go.Bar(
-            x=100 - null_frequencies_by_column,  # Remaining part
-            y=y_vals,
-            orientation='h',
-            marker=dict(color="#cfcfcf"),
-            name="Non-Null (%)",
-            showlegend=False  # Optional: Hide legend for cleaner look
-        )
+                map_val = {
+                    "Fixed" : "red",
+                    "Informative" : "green",
+                    "ID-like" : "darkgoldenrod",
+                    "Categorical (balanced)" : "royalblue",
+                    "Categorical (imbalanced)" : "mediumorchid",
+                    "Mostly unique" : "sienna"
+                }
 
-        # Add both traces to the figure
-        fig.add_trace(bar_trace_col, row=1, col=2)  # Foreground bar
-        fig.add_trace(bar_trace_complement, row=1, col=2)  # Background bar
+                return (
+                    f"color: {map_val[val]}"
+                )
 
-        # Enable stacking
-        fig.update_layout(barmode='stack')
+            summary_df = summary_df.style.map(category_bar_style, subset=['Category'])
 
-        # Update layout
-        fig.update_layout(
-            xaxis2=dict(title="Nulls (%) by Column",showticklabels=True),  # X-axis for row null frequency chart
-            # xaxis=dict(showticklabels=False),
-            # yaxis=dict(showticklabels=False),
-            yaxis=dict(
-                title="Columns",
-                tickmode="array",
-                tickvals=list(range(len(df.columns))),
-                ticktext=df.columns
-            ),
-            yaxis2=dict(autorange="reversed"),
-            xaxis3=dict(title="Nulls (%) by Row"),  # X-axis for column null frequency chart
-            yaxis3=dict(autorange="reversed",showticklabels=True),  # Hide y-axis ticks for column null frequency chart
-            title='Heatmap',
-            height=(100+freq_height+row_height*len(df.columns))
-        )
+            st.dataframe(
+                summary_df,
+                column_config={
+                    "Histogram": st.column_config.BarChartColumn(
+                        "Distribution",
+                        help="Histogram of column values",
+                        y_min=0
+                    ),
+                },
+                hide_index=True,
+                height=600
+            )
 
-        # Show figure
-        st.plotly_chart(fig)
+            
 
-        fig = make_subplots(
-            rows=round(len(df.columns)-.5)+1, cols=3,
-            subplot_titles=df.columns,
-            vertical_spacing=0.05
-        )
 
 # Function to show an interactive plot
 # Function to show an interactive plot
@@ -328,8 +332,56 @@ def show_interactive_plot(df, uploaded_file):
         st.session_state.x_axis = st.selectbox("Select X-axis column", columns, index=columns.index(st.session_state.x_axis))
         st.session_state.y_axis = st.selectbox("Select Y-axis column", columns, index=columns.index(st.session_state.y_axis))
         
-        # Interactive plot with Plotly
-        plot = px.scatter(df.to_pandas(), x=st.session_state.x_axis, y=st.session_state.y_axis)
+        # Get actual data from df
+        x_col = st.session_state.x_axis
+        y_col = st.session_state.y_axis
+
+        # Plotly scatter plot
+        plot = px.scatter(df, x=x_col, y=y_col, opacity=0.5)
+
+        try:
+
+            x_raw = df[x_col]
+            y_raw = df[y_col]
+
+            # Convert y to numeric (safely)
+            y_vals = pd.to_numeric(y_raw, errors='coerce')
+
+            # LOWESS smoothing
+            half_frac = .15 # between 0 and 0.5
+            min_opacity = 0.3
+            smoothed = lowess(y_vals, x_raw, frac=2*half_frac, return_sorted=True)
+            smoothed_x, smoothed_y = smoothed[:, 0], smoothed[:, 1]
+
+            # Add LOWESS smooth line
+            # plot.add_trace(go.Scatter(x=smoothed_x, y=smoothed_y, mode='lines', name='Trend', line=dict(color='darkorange')))
+
+            # Normalize index to [0, 1] to define fading
+            n = len(smoothed_x)
+            fade = np.linspace(0, 1, n)
+            alpha = np.minimum(1, (1-min_opacity)/(2*half_frac)+min_opacity - ((1-min_opacity)/half_frac)* np.abs(fade - 0.5) )  # peaks at center, fades at ends
+
+            # Add each line segment with individual opacity
+            for i in range(n - 1):
+                segment = go.Scatter(
+                    x=smoothed_x[i:i+2],
+                    y=smoothed_y[i:i+2],
+                    mode='lines',
+                    line=dict(color='darkorange', width=2),
+                    opacity=alpha[i],  # Varies from 0 to 1 to 0
+                    showlegend=False
+                )
+                plot.add_trace(segment)
+
+            # Optionally add a legend with a dummy trace
+            plot.add_trace(go.Scatter(
+                x=[None], y=[None], mode='lines', name='Trend',
+                line=dict(color='darkorange')
+            ))
+
+        except Exception:
+            pass
+
         st.plotly_chart(plot)
 
 # Function to export the report
@@ -458,7 +510,8 @@ def main():
                 st.metric("Completeness", str(round(100*(1-sum(df.select(pl.all().is_null()).sum()).item()/(df.shape[0]*df.shape[1])),2))+'%', border = True)
 
             df = df.sql(st.session_state.sql_query) if 'sql_query' in st.session_state and st.session_state.sql_query.strip() and st.session_state.filter=='filtered' else st.session_state.dataframe
-            st.dataframe(df.to_pandas().style.applymap(lambda x: 'background-color: white'), height= 360)
+            with st.spinner("Loading...", show_time=True):
+                st.dataframe(df.to_pandas().style.applymap(lambda x: 'background-color: white'), height= 360)
 
             col1, col2 = st.columns([0.75, 0.25], vertical_alignment='bottom')
             
