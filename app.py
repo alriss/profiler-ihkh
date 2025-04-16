@@ -9,7 +9,7 @@ from time import strftime, gmtime
 from streamlit_option_menu import option_menu
 import numpy as np
 from statsmodels.nonparametric.smoothers_lowess import lowess
-
+from datetime import datetime
 
 def format_size(size_in_bytes):
     units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
@@ -31,7 +31,7 @@ def load_file(uploaded_file):
                 first_lines = uploaded_file.read(1024).decode('utf-8')
                 uploaded_file.seek(0)  # Reset file pointer
                 delimiter = ',' if first_lines.count(',') > first_lines.count(';') else ';'
-                df = pl.read_csv(uploaded_file, separator=delimiter,truncate_ragged_lines=True,infer_schema_length=10000)
+                df = pl.read_csv(uploaded_file, separator=delimiter,truncate_ragged_lines=True,infer_schema_length=10000, try_parse_dates=True)
             except Exception as e:
                 st.error(f"Error loading file: {e}")
                 return None
@@ -225,9 +225,9 @@ def show_data_profile(df):
                     category = "Informative"
                 elif unique_values == len(df):
                     category = "ID-like"
-                elif (df[col].dtype in [pl.Utf8, pl.Categorical]) and ((unique_values<=20 and round(efficiency,2)>=.9) or round(entropy_value, 2) == round(math.log2(unique_values), 2)):
+                elif (df[col].dtype in [pl.Utf8, pl.Categorical, pl.Date, pl.Datetime]) and ((unique_values<=20 and round(efficiency,2)>=.9) or round(entropy_value, 2) == round(math.log2(unique_values), 2)):
                     category = "Categorical (balanced)"
-                elif (df[col].dtype in [pl.Utf8, pl.Categorical]) and ((unique_values<=20 and round(efficiency,2)<.9) or entropy_value < 1):
+                elif (df[col].dtype in [pl.Utf8, pl.Categorical, pl.Date, pl.Datetime]) and ((unique_values<=20 and round(efficiency,2)<.9) or entropy_value < 1):
                     category = "Categorical (imbalanced)"
                 elif unique_values / total > 0.9:
                     category = "Mostly unique"
@@ -241,7 +241,7 @@ def show_data_profile(df):
                 summary_data["μ"].append(df[col].mean())
                 summary_data["Median"].append(df[col].median())
 
-                if df[col].dtype in [pl.Utf8, pl.Categorical]:
+                if df[col].dtype in [pl.Utf8, pl.Categorical, pl.Date, pl.Datetime]:
                     summary_data["σ"].append("")
                 else:
                     summary_data["σ"].append(round(df[col].std(), 2))
@@ -251,7 +251,7 @@ def show_data_profile(df):
                 summary_data["Mode"].append(mode_value)
 
                 # Compute Skewness
-                if df[col].dtype not in [pl.Utf8, pl.Categorical]:
+                if df[col].dtype not in [pl.Utf8, pl.Categorical, pl.Date, pl.Datetime]:
                     # Remove None values
                     valid_values = [x for x in df[col] if x is not None]
                     
@@ -337,29 +337,43 @@ def show_interactive_plot(df, uploaded_file):
         y_col = st.session_state.y_axis
 
         # Plotly scatter plot
-        plot = px.scatter(df, x=x_col, y=y_col, opacity=0.5)
+        # plot = px.scatter(df.sort(x_col), x=x_col, y=y_col, opacity=0.5)
+        plot = px.scatter(x=df[x_col], y=df[y_col], opacity=0.5)
 
         try:
 
+            # Extract raw columns (already parsed/formatted appropriately)
             x_raw = df[x_col]
             y_raw = df[y_col]
 
-            # Convert y to numeric (safely)
+            # Convert y to numeric
             y_vals = pd.to_numeric(y_raw, errors='coerce')
 
+            # Convert x to numeric (if datetime, use timestamp; else try to coerce)
+            if df[x_col].dtype in [pl.Date, pl.Datetime]:
+                x_vals = x_raw.to_pandas().astype('int64')  # Nanoseconds since epoch
+                is_datetime = True
+            else:
+                x_vals = pd.to_numeric(x_raw, errors='coerce')
+                is_datetime = False
+
             # LOWESS smoothing
-            half_frac = .15 # between 0 and 0.5
+            half_frac = 0.1
             min_opacity = 0.3
-            smoothed = lowess(y_vals, x_raw, frac=2*half_frac, return_sorted=True)
+            smoothed = lowess(y_vals, x_vals, frac=2 * half_frac, return_sorted=True)
             smoothed_x, smoothed_y = smoothed[:, 0], smoothed[:, 1]
 
-            # Add LOWESS smooth line
-            # plot.add_trace(go.Scatter(x=smoothed_x, y=smoothed_y, mode='lines', name='Trend', line=dict(color='darkorange')))
+            # Convert smoothed_x back to datetime if needed
+            if is_datetime:
+                smoothed_x = pd.to_datetime(smoothed_x, unit= 'ms')
 
             # Normalize index to [0, 1] to define fading
             n = len(smoothed_x)
             fade = np.linspace(0, 1, n)
-            alpha = np.minimum(1, (1-min_opacity)/(2*half_frac)+min_opacity - ((1-min_opacity)/half_frac)* np.abs(fade - 0.5) )  # peaks at center, fades at ends
+            alpha = np.minimum(
+                1,
+                (1 - min_opacity) / (2 * half_frac) + min_opacity - ((1 - min_opacity) / half_frac) * np.abs(fade - 0.5)
+            )
 
             # Add each line segment with individual opacity
             for i in range(n - 1):
@@ -368,18 +382,19 @@ def show_interactive_plot(df, uploaded_file):
                     y=smoothed_y[i:i+2],
                     mode='lines',
                     line=dict(color='darkorange', width=2),
-                    opacity=alpha[i],  # Varies from 0 to 1 to 0
+                    opacity=alpha[i],
                     showlegend=False
                 )
                 plot.add_trace(segment)
 
-            # Optionally add a legend with a dummy trace
+            # Add dummy trace for legend
             plot.add_trace(go.Scatter(
                 x=[None], y=[None], mode='lines', name='Trend',
                 line=dict(color='darkorange')
             ))
 
-        except Exception:
+        except Exception as e:
+            print(e)
             pass
 
         st.plotly_chart(plot)
